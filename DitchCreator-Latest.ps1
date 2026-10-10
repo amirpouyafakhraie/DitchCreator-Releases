@@ -41,7 +41,10 @@ function Assert-SafePath([string]$name) {
 }
 
 function Get-FileSha256([string]$path) {
-    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($path))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
 }
 
 function Read-Package([string]$path, [string]$expectedVersion = '') {
