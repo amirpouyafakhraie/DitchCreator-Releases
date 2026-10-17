@@ -143,13 +143,25 @@ function Get-InstalledCandidates([string]$root) {
     return $result
 }
 
+function ConvertTo-ReleaseList($response) {
+    $releases = @()
+    foreach ($item in $response) {
+        if ($item -is [System.Array]) {
+            foreach ($release in $item) { $releases += ,$release }
+        }
+        else { $releases += ,$item }
+    }
+    return $releases
+}
+
 function Get-ReleaseAssets([string]$apiUrl) {
     $headers = @{ 'User-Agent' = 'DitchCreator-Latest-Updater'; 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
     if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
     $result = @()
     for ($page = 1; $page -le 100; $page++) {
         $separator = if ($apiUrl.Contains('?')) { '&' } else { '?' }
-        $releases = @(Invoke-RestMethod -Uri ($apiUrl + $separator + 'per_page=100&page=' + $page) -Headers $headers -TimeoutSec 20)
+        $response = Invoke-RestMethod -Uri ($apiUrl + $separator + 'per_page=100&page=' + $page) -Headers $headers -TimeoutSec 20
+        $releases = @(ConvertTo-ReleaseList $response)
         foreach ($release in $releases) {
             if ($release.draft -or [string]$release.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { continue }
             $releaseVersion = $Matches[1]
@@ -251,7 +263,29 @@ try {
             [pscustomobject]@{ Version = Get-Version '1.0.25'; Source = 'Package' }
         )
         if ($choice.Source -ne 'Installed') { throw 'Offline no-downgrade selection failed.' }
-        Write-Host 'Semantic version ordering and offline no-downgrade selection passed.'
+        $firstRelease = [pscustomobject]@{
+            draft = $false; tag_name = 'v1.0.26'; assets = @([pscustomobject]@{ name = 'first.zip' })
+        }
+        $secondRelease = [pscustomobject]@{
+            draft = $false; tag_name = 'v1.0.25'; assets = @([pscustomobject]@{ name = 'second.zip' })
+        }
+        $nestedResponse = ,([object[]]@($firstRelease, $secondRelease))
+        $materialized = @(ConvertTo-ReleaseList $nestedResponse)
+        $singleMaterialized = @(ConvertTo-ReleaseList $firstRelease)
+        $emptyMaterialized = @(ConvertTo-ReleaseList $null)
+        if ($singleMaterialized.Count -ne 1 -or $singleMaterialized[0] -ne $firstRelease -or
+            $emptyMaterialized.Count -ne 0 -or
+            $materialized.Count -ne 2 -or
+            [string]$materialized[0].tag_name -cne 'v1.0.26' -or
+            [string]$materialized[1].tag_name -cne 'v1.0.25' -or
+            $materialized[0].draft -isnot [bool] -or $materialized[1].draft -isnot [bool] -or
+            $materialized[0].tag_name -isnot [string] -or $materialized[1].tag_name -isnot [string] -or
+            @($materialized[0].assets).Count -ne 1 -or @($materialized[1].assets).Count -ne 1 -or
+            [string]$materialized[0].assets[0].name -cne 'first.zip' -or
+            [string]$materialized[1].assets[0].name -cne 'second.zip') {
+            throw 'PowerShell 5.1 release response materialization failed.'
+        }
+        Write-Host 'Semantic version ordering, offline no-downgrade selection, and release response materialization passed.'
         exit 0
     }
     $installed = @(Get-InstalledCandidates $CandidateRoot)
